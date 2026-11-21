@@ -980,8 +980,13 @@ def evaluate(model, data, split="test", batch=16, n_neg=50, seed=0, max_q=None):
     return out
 
 
-def fit(model, data, epochs=10, lr=5e-3, batch=16, seed=0, valid_q=200, verbose=True, time_limit=None, max_steps=120,
+def fit(model, data, epochs=None, lr=None, batch=16, seed=0, valid_q=200, verbose=True, time_limit=None, max_steps=None,
         select="valid"):
+    # None = use the variant's own schedule (model.train_cfg), e.g. 40 epochs for VARIANTS["PHOT"]
+    cfg = getattr(model, "train_cfg", {})
+    epochs = cfg.get("epochs", 10) if epochs is None else epochs
+    lr = cfg.get("lr", 5e-3) if lr is None else lr
+    max_steps = cfg.get("max_steps", 120) if max_steps is None else max_steps
     set_seed(seed); rng = np.random.default_rng(seed)
     model.to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
