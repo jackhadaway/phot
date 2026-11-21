@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+ckpt/
+results/*.log
+.ipynb_checkpoints/
+.DS_Store
