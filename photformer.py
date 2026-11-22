@@ -981,8 +981,10 @@ def evaluate(model, data, split="test", batch=16, n_neg=50, seed=0, max_q=None):
 
 
 def fit(model, data, epochs=None, lr=None, batch=16, seed=0, valid_q=200, verbose=True, time_limit=None, max_steps=None,
-        select="valid"):
+        select="valid", on_epoch=None):
     # None = use the variant's own schedule (model.train_cfg), e.g. 40 epochs for VARIANTS["PHOT"]
+    # valid_q=None selects on the full validation set. on_epoch(model, ep) -> dict is merged into hist (diagnostics
+    # only: it never affects selection, and evaluate() does not touch the global RNG used by training).
     cfg = getattr(model, "train_cfg", {})
     epochs = cfg.get("epochs", 10) if epochs is None else epochs
     lr = cfg.get("lr", 5e-3) if lr is None else lr
@@ -1011,8 +1013,12 @@ def fit(model, data, epochs=None, lr=None, batch=16, seed=0, valid_q=200, verbos
                     p.copy_(raw[k])
             v_raw, v = v, max(v, ve)
         hist.append(dict(epoch=ep, loss=loss, valid=v, sec=time.time() - t0))
+        extra = on_epoch(model, ep) if on_epoch else None
+        if extra:
+            hist[-1].update(extra)
         if verbose:
-            print(f"  ep {ep:3d} loss {loss:.4f} valid MRR {v:.4f} ({time.time()-t0:.0f}s)", flush=True)
+            tail = "".join(f" {k} {x:.4f}" for k, x in (extra or {}).items())
+            print(f"  ep {ep:3d} loss {loss:.4f} valid MRR {v:.4f}{tail} ({time.time()-t0:.0f}s)", flush=True)
         if v > best:
             best, best_state = v, copy.deepcopy(model.state_dict())
         if time_limit and time.time() - t0 > time_limit:

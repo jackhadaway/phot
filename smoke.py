@@ -20,8 +20,21 @@ torch.set_num_threads(int(os.environ.get("THREADS", "2")))
 data = InductiveSplit("data/grail_repo/data", ds); print(data.summary())
 set_seed(0)
 model = PHOTformer(data.n_rel, **VARIANTS["PHOT"]).to(DEVICE)
+# VALID_Q: validation queries used to pick the epoch ("all" = the full validation set; the notebook default is 200).
+# TRACK=1: also log, every epoch, the 200-query validation MRR and the test MRR. Diagnostic only, never used to select.
+vq = os.environ.get("VALID_Q", "200"); valid_q = None if vq == "all" else int(vq)
+track = os.environ.get("TRACK") == "1"
+
+
+def diagnostics(m, ep):
+    return {"v200": evaluate(m, data, "valid", max_q=200, seed=0)["final"]["full"]["MRR"],
+            "P1": evaluate(m, data, "test")["final"]["full"]["MRR"],
+            "P2": evaluate(m, data, "test_merged")["final"]["full"]["MRR"]}
+
+
 t0 = time.time()
-tr = fit(model, data, seed=0, verbose=True, epochs=epochs, select="valid")
+tr = fit(model, data, seed=0, verbose=True, epochs=epochs, select="valid", valid_q=valid_q,
+         on_epoch=diagnostics if track else None)
 res = {}
 for name, split in (("P1 (inductive test)", "test"), ("P2 (valid+test merged)", "test_merged")):
     f = evaluate(model, data, split)["final"]["full"]; res[split] = f
@@ -29,6 +42,6 @@ for name, split in (("P1 (inductive test)", "test"), ("P2 (valid+test merged)", 
 print(f"total {time.time() - t0:.0f}s")
 os.makedirs("results", exist_ok=True)
 with open("results/runs.jsonl", "a") as fh:
-    fh.write(json.dumps(dict(dataset=ds, variant="PHOT", seed=0, epochs=epochs, test=res, train=tr,
+    fh.write(json.dumps(dict(dataset=ds, variant="PHOT", seed=0, epochs=epochs, valid_q=vq, test=res, train=tr,
                              commit=subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True,
                                                    text=True).stdout.strip())) + "\n")
