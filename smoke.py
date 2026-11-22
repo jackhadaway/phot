@@ -16,7 +16,7 @@ from photformer import DEVICE, VARIANTS, InductiveSplit, PHOTformer, evaluate, f
 
 ds = sys.argv[1] if len(sys.argv) > 1 else "nell_v1"
 epochs = int(sys.argv[2]) if len(sys.argv) > 2 else 3
-torch.set_num_threads(2)
+torch.set_num_threads(int(os.environ.get("THREADS", "2")))
 data = InductiveSplit("data/grail_repo/data", ds); print(data.summary())
 set_seed(0)
 model = PHOTformer(data.n_rel, **VARIANTS["PHOT"]).to(DEVICE)
