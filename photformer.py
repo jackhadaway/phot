@@ -911,18 +911,22 @@ def tie_rank(scores, gold_idx):
     return 1.0 + float((scores > g).sum()) + 0.5 * float((scores == g).sum() - 1)
 
 
+def split_queries(data, split):
+    """(graph, reciprocal queries, filter) of an evaluation split"""
+    if split == "test":
+        return data.G_test, reciprocal(data.ind_test, data.n_rel), data.filt_test
+    if split == "test_merged":          # standard GraIL protocol (NBFNet, A*Net, ULTRA...): inductive valid + test
+        return data.G_test, reciprocal(np.concatenate([data.ind_valid, data.ind_test]), data.n_rel), data.filt_test
+    if split == "ind_valid":            # validation triples of the inductive graph (model selection as NBFNet/ULTRA)
+        return data.G_test, reciprocal(data.ind_valid, data.n_rel), data.filt_test
+    return data.G_train, reciprocal(data.valid, data.n_rel), data.filt_train
+
+
 @torch.no_grad()
 def evaluate(model, data, split="test", batch=16, n_neg=50, seed=0, max_q=None):
     """Full filtered ranking (MRR, H@1/3/10) and the GraIL/CBLiP protocol (rank vs 50 random negatives, H@10)."""
     model.eval()
-    if split == "test":
-        G, Q, filt = data.G_test, reciprocal(data.ind_test, data.n_rel), data.filt_test
-    elif split == "test_merged":        # standard GraIL protocol (NBFNet, A*Net, ULTRA...): inductive valid + test
-        G, Q, filt = data.G_test, reciprocal(np.concatenate([data.ind_valid, data.ind_test]), data.n_rel), data.filt_test
-    elif split == "ind_valid":          # validation triples of the inductive graph (model selection as NBFNet/ULTRA)
-        G, Q, filt = data.G_test, reciprocal(data.ind_valid, data.n_rel), data.filt_test
-    else:
-        G, Q, filt = data.G_train, reciprocal(data.valid, data.n_rel), data.filt_train
+    G, Q, filt = split_queries(data, split)
     if max_q and len(Q) > max_q:
         Q = Q[np.random.default_rng(seed).permutation(len(Q))[:max_q]]
     rng = np.random.default_rng(seed)

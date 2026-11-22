@@ -40,6 +40,10 @@ for name, split in (("P1 (inductive test)", "test"), ("P2 (valid+test merged)", 
     f = evaluate(model, data, split)["final"]["full"]; res[split] = f
     print(f"{name}: MRR {f['MRR']:.4f}  H@1 {f['H1']:.4f}  H@10 {f['H10']:.4f}")
 print(f"total {time.time() - t0:.0f}s")
+os.makedirs("ckpt", exist_ok=True)
+ck = f"ckpt/{ds}_s0_e{epochs}_v{vq}.pt"
+torch.save(dict(dataset=ds, n_rel=data.n_rel, cfg=VARIANTS["PHOT"], state=model.state_dict()), ck)
+print("saved", ck)
 os.makedirs("results", exist_ok=True)
 with open("results/runs.jsonl", "a") as fh:
     fh.write(json.dumps(dict(dataset=ds, variant="PHOT", seed=0, epochs=epochs, valid_q=vq, test=res, train=tr,
