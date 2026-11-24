@@ -5,7 +5,7 @@ Variants differ from PHOT only in the PH / OT switches; everything else (relatio
 graph (see the WN18RR epoch-selection finding), never on test.
 
 usage: python ablate.py run <variant> <dataset> <seed>     one run (THREADS env, default 1)
-       python ablate.py queue [workers=3] [seeds=0,1,2]    every run not yet logged, seed-major, in parallel
+       python ablate.py queue [workers=3] [seeds=0,1,2] [group=phot|backbone]   every run not yet logged, in parallel
        python ablate.py table                              mean +- std per variant and dataset, with paired deltas
 """
 import json
@@ -25,12 +25,23 @@ ABLATIONS = {
     "neither": dict(ph=None, ot_readout=False),     # message passing + link counts
 }
 DATASETS = ["nell_v1", "fb237_v1", "WN18RR_v1"]
+# backbone ablation: starts from "neither" (no PH, no OT) and removes the backbone's own extras.
+BACKBONE = {
+    "bb-noid":   dict(ABLATIONS["neither"], rel_ids=False),               # no learned relation identities
+    "bb-nolink": dict(ABLATIONS["neither"], link=False),                  # no direct-link counts
+    "bb-plain":  dict(ABLATIONS["neither"], rel_ids=False, link=False),   # ~ ULTRA architecture trained from scratch
+}
+# group -> (variants, datasets, reference variant for paired deltas). NELL v1 is too noisy for these effects.
+GROUPS = {
+    "phot":     (ABLATIONS, DATASETS, "full"),
+    "backbone": ({"neither": ABLATIONS["neither"], **BACKBONE}, ["fb237_v1", "WN18RR_v1"], "neither"),
+}
 LOG = "results/ablation.jsonl"
 
 
 def config(variant):
     from photformer import VARIANTS
-    return dict(VARIANTS["PHOT"], **ABLATIONS[variant])
+    return dict(VARIANTS["PHOT"], **{**ABLATIONS, **BACKBONE}[variant])
 
 
 def run(variant, ds, seed):
@@ -60,10 +71,11 @@ def done():
     return {(r["variant"], r["dataset"], r["seed"]) for r in map(json.loads, open(LOG))}
 
 
-def queue(workers=3, seeds=(0, 1, 2)):
+def queue(workers=3, seeds=(0, 1, 2), group="phot"):
     os.makedirs("results/ablation_logs", exist_ok=True)
     have = done()
-    jobs = [(v, d, s) for s in seeds for d in DATASETS for v in ABLATIONS if (v, d, s) not in have]
+    variants, datasets, _ = GROUPS[group]
+    jobs = [(v, d, s) for s in seeds for d in datasets for v in variants if (v, d, s) not in have]
     print(f"{len(jobs)} runs to do, {len(have)} already logged, {workers} workers", flush=True)
 
     def one(job):
@@ -84,18 +96,19 @@ def table():
     R = {}
     for r in map(json.loads, open(LOG)):
         R[(r["variant"], r["dataset"], r["seed"])] = r["test"]
-    for proto, key in (("P1 (inductive test)", "test"), ("P2 (valid+test merged)", "test_merged")):
-        print(f"\n{proto}: MRR mean +- std (seeds) | paired delta vs full, mean +- std")
-        for d in DATASETS:
+    for group, (variants, datasets, ref) in GROUPS.items():
+      for proto, key in (("P1 (inductive test)", "test"), ("P2 (valid+test merged)", "test_merged")):
+        print(f"\n[{group}] {proto}: MRR mean +- std (seeds) | paired delta vs {ref}, mean +- std")
+        for d in datasets:
             print(f"  {d}")
-            for v in ABLATIONS:
+            for v in variants:
                 seeds = sorted(s for (vv, dd, s) in R if vv == v and dd == d)
                 if not seeds:
                     continue
                 m = np.array([R[(v, d, s)][key]["MRR"] for s in seeds])
-                both = [s for s in seeds if ("full", d, s) in R]
-                delta = np.array([R[(v, d, s)][key]["MRR"] - R[("full", d, s)][key]["MRR"] for s in both])
-                dtxt = f" | {delta.mean():+.3f} +- {delta.std():.3f}" if v != "full" and len(delta) else ""
+                both = [s for s in seeds if (ref, d, s) in R]
+                delta = np.array([R[(v, d, s)][key]["MRR"] - R[(ref, d, s)][key]["MRR"] for s in both])
+                dtxt = f" | {delta.mean():+.3f} +- {delta.std():.3f}" if v != ref and len(delta) else ""
                 print(f"    {v:8s} {m.mean():.3f} +- {m.std():.3f} ({len(m)}){dtxt}")
 
 
@@ -106,6 +119,6 @@ if __name__ == "__main__":
     elif sys.argv[1] == "queue":
         w = int(sys.argv[2]) if len(sys.argv) > 2 else 3
         seeds = tuple(int(s) for s in sys.argv[3].split(",")) if len(sys.argv) > 3 else (0, 1, 2)
-        queue(w, seeds)
+        queue(w, seeds, sys.argv[4] if len(sys.argv) > 4 else "phot")
     else:
         table()
