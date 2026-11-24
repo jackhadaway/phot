@@ -9,6 +9,7 @@ usage: python ablate.py run <variant> <dataset> <seed>     one run (THREADS env,
        python ablate.py table                              mean +- std per variant and dataset, with paired deltas
 """
 import json
+import math
 import os
 import subprocess
 import sys
@@ -92,24 +93,54 @@ def queue(workers=3, seeds=(0, 1, 2), group="phot"):
     print("queue finished", flush=True)
 
 
+def t_pvalue(t, df):
+    """two-sided p-value of Student's t with df degrees of freedom (numerical integral of the density; no scipy)"""
+    if not np.isfinite(t):
+        return 0.0
+    x = np.linspace(0.0, abs(t), 20001)
+    c = math.exp(math.lgamma((df + 1) / 2) - math.lgamma(df / 2)) / math.sqrt(df * math.pi)
+    y = c * (1 + x ** 2 / df) ** (-(df + 1) / 2)
+    return float(max(0.0, 1.0 - 2.0 * np.sum((y[1:] + y[:-1]) / 2 * np.diff(x))))
+
+
+def paired(delta):
+    """mean, sample std (ddof=1), paired t and two-sided p for per-seed differences"""
+    n = len(delta)
+    if n < 2:
+        return delta.mean(), float("nan"), float("nan"), float("nan")
+    sd = delta.std(ddof=1)
+    t = delta.mean() / (sd / math.sqrt(n)) if sd > 0 else math.copysign(float("inf"), delta.mean())
+    return delta.mean(), sd, t, t_pvalue(t, n - 1)
+
+
 def table():
+    """mean +- sample std over seeds, and the paired (same-seed) difference to the group's reference variant with a
+    paired t-test. * = p < 0.05, ** = p < 0.01. With 3 seeds (df = 2), p < 0.05 needs |t| > 4.30."""
     R = {}
     for r in map(json.loads, open(LOG)):
         R[(r["variant"], r["dataset"], r["seed"])] = r["test"]
     for group, (variants, datasets, ref) in GROUPS.items():
-      for proto, key in (("P1 (inductive test)", "test"), ("P2 (valid+test merged)", "test_merged")):
-        print(f"\n[{group}] {proto}: MRR mean +- std (seeds) | paired delta vs {ref}, mean +- std")
-        for d in datasets:
-            print(f"  {d}")
-            for v in variants:
-                seeds = sorted(s for (vv, dd, s) in R if vv == v and dd == d)
-                if not seeds:
-                    continue
-                m = np.array([R[(v, d, s)][key]["MRR"] for s in seeds])
-                both = [s for s in seeds if (ref, d, s) in R]
-                delta = np.array([R[(v, d, s)][key]["MRR"] - R[(ref, d, s)][key]["MRR"] for s in both])
-                dtxt = f" | {delta.mean():+.3f} +- {delta.std():.3f}" if v != ref and len(delta) else ""
-                print(f"    {v:8s} {m.mean():.3f} +- {m.std():.3f} ({len(m)}){dtxt}")
+        for proto, key in (("P1 (inductive test)", "test"), ("P2 (valid+test merged)", "test_merged")):
+            print(f"\n[{group}] {proto}: MRR mean +- sd (seeds) | paired difference vs {ref}: mean +- sd, t, p")
+            for d in datasets:
+                print(f"  {d}")
+                for v in variants:
+                    seeds = sorted(s for (vv, dd, s) in R if vv == v and dd == d)
+                    if not seeds:
+                        continue
+                    m = np.array([R[(v, d, s)][key]["MRR"] for s in seeds])
+                    sd = f"{m.std(ddof=1):.3f}" if len(m) > 1 else "  -  "
+                    line = f"    {v:9s} {m.mean():.3f} +- {sd} ({len(m)})"
+                    both = [s for s in seeds if (ref, d, s) in R]
+                    if v != ref and both:
+                        delta = np.array([R[(v, d, s)][key]["MRR"] - R[(ref, d, s)][key]["MRR"] for s in both])
+                        mu, dsd, t, pv = paired(delta)
+                        if len(delta) > 1:
+                            star = "**" if pv < 0.01 else "*" if pv < 0.05 else ""
+                            line += f" | {mu:+.3f} +- {dsd:.3f}  t {t:+6.1f}  p {pv:.3f} {star}"
+                        else:
+                            line += f" | {mu:+.3f} (1 seed)"
+                    print(line)
 
 
 if __name__ == "__main__":

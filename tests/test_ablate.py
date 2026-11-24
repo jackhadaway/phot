@@ -46,3 +46,13 @@ def test_backbone_differs_from_neither_only_in_extras():
     for v in BACKBONE:
         diff = {k for k in set(base) | set(config(v)) if base.get(k) != config(v).get(k)}
         assert diff and diff <= {"rel_ids", "link"}, (v, diff)
+
+
+def test_paired_t_matches_tables():
+    from ablate import paired, t_pvalue
+    assert t_pvalue(4.303, 2) == pytest.approx(0.05, abs=1e-3)       # textbook critical values
+    assert t_pvalue(2.776, 4) == pytest.approx(0.05, abs=1e-3)
+    assert t_pvalue(0.0, 2) == pytest.approx(1.0)
+    mu, sd, t, p = paired(np.array([-0.04, -0.035, -0.042]))
+    assert sd == pytest.approx(np.std([-0.04, -0.035, -0.042], ddof=1))
+    assert t == pytest.approx(mu / (sd / np.sqrt(3))) and p < 0.01
