@@ -849,6 +849,13 @@ def query_masks(G, Q, n_rel):
     return m, banned
 
 
+def _device(model):
+    try:
+        return next(model.parameters()).device
+    except (AttributeError, StopIteration):
+        return DEVICE
+
+
 def train_epoch(model, data, opt, batch=16, rng=None, ls=0.0, max_steps=None):
     n_rel = data.n_rel
     Q = reciprocal(data.train, n_rel)
@@ -863,6 +870,7 @@ def train_epoch(model, data, opt, batch=16, rng=None, ls=0.0, max_steps=None):
         data.filt_ind_graph = data._filter([data.ind_graph])
     Q_ind = reciprocal(data.ind_graph, n_rel) if tta > 0 else None
     model.train()
+    dev = _device(model)
     for s in range(0, len(perm), batch):
         if tta > 0 and np.random.rand() < tta:
             G, filt = data.G_test, data.filt_ind_graph
@@ -870,11 +878,11 @@ def train_epoch(model, data, opt, batch=16, rng=None, ls=0.0, max_steps=None):
         else:
             G, filt = data.G_train, data.filt_train
             qb = Q[perm[s:s + batch]]
-        h, q, t = [torch.as_tensor(qb[:, i], device=DEVICE) for i in range(3)]
+        h, q, t = [torch.as_tensor(qb[:, i], device=dev) for i in range(3)]
         emask, banned = query_masks(G, qb, n_rel)
         if getattr(model, "drop_edge", 0) > 0:          # DropEdge: each query sees a random sub-graph
             emask = emask * (torch.rand_like(emask) > model.drop_edge).float()
-        s1, x, zr, zq = model.encode(G, h, q, emask.to(DEVICE), banned, rng)
+        s1, x, zr, zq = model.encode(G, h, q, emask.to(dev), banned, rng)
         # filtered 1-vs-all CE: other true answers in the training graph are masked out
         fm = torch.zeros_like(s1, dtype=torch.bool)
         for i, (hh, rr, tt) in enumerate(qb):
@@ -927,9 +935,10 @@ def evaluate(model, data, split="test", batch=16, n_neg=50, seed=0, max_q=None):
         Q = Q[np.random.default_rng(seed).permutation(len(Q))[:max_q]]
     rng = np.random.default_rng(seed)
     full1, full2, neg1, neg2 = [], [], [], []
+    dev = _device(model)
     for s in range(0, len(Q), batch):
         qb = Q[s:s + batch]
-        h, q, t = [torch.as_tensor(qb[:, i], device=DEVICE) for i in range(3)]
+        h, q, t = [torch.as_tensor(qb[:, i], device=dev) for i in range(3)]
         s1, x, zr, zq = model.encode(G, h, q, None, None, np.random.default_rng(0))
         s1 = s1.cpu()
         for i, (hh, rr, tt) in enumerate(qb):
