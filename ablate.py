@@ -5,7 +5,7 @@ Variants differ from PHOT only in the PH / OT switches; everything else (relatio
 graph (see the WN18RR epoch-selection finding), never on test.
 
 usage: python ablate.py run <variant> <dataset> <seed>     one run (THREADS env, default 1)
-       python ablate.py queue [workers=3] [seeds=0,1,2] [group=phot|backbone]   every run not yet logged, in parallel
+       python ablate.py queue [workers=3] [seeds=0,1,2] [group=phot|backbone|noid]   every run not yet logged, in parallel
        python ablate.py table                              mean +- std per variant and dataset, with paired deltas
 """
 import json
@@ -32,17 +32,20 @@ BACKBONE = {
     "bb-nolink": dict(ABLATIONS["neither"], link=False),                  # no direct-link counts
     "bb-plain":  dict(ABLATIONS["neither"], rel_ids=False, link=False),   # ~ ULTRA architecture trained from scratch
 }
+# full PHOT without relation identities: do PH + OT still add on top of the no-ID backbone (bb-noid)?
+NOID = {"full-noid": dict(rel_ids=False)}
 # group -> (variants, datasets, reference variant for paired deltas). NELL v1 is too noisy for these effects.
 GROUPS = {
     "phot":     (ABLATIONS, DATASETS, "full"),
     "backbone": ({"neither": ABLATIONS["neither"], **BACKBONE}, ["fb237_v1", "WN18RR_v1"], "neither"),
+    "noid":     ({"bb-noid": BACKBONE["bb-noid"], **NOID}, ["fb237_v1", "WN18RR_v1"], "bb-noid"),
 }
 LOG = "results/ablation.jsonl"
 
 
 def config(variant):
     from photformer import VARIANTS
-    return dict(VARIANTS["PHOT"], **{**ABLATIONS, **BACKBONE}[variant])
+    return dict(VARIANTS["PHOT"], **{**ABLATIONS, **BACKBONE, **NOID}[variant])
 
 
 def run(variant, ds, seed):

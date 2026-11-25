@@ -56,3 +56,12 @@ def test_paired_t_matches_tables():
     mu, sd, t, p = paired(np.array([-0.04, -0.035, -0.042]))
     assert sd == pytest.approx(np.std([-0.04, -0.035, -0.042], ddof=1))
     assert t == pytest.approx(mu / (sd / np.sqrt(3))) and p < 0.01
+
+
+def test_full_noid_is_phot_without_ids(toy_split):
+    from ablate import NOID
+    base = config("full")
+    diff = {k for k in set(base) | set(config("full-noid")) if base.get(k) != config("full-noid").get(k)}
+    assert diff == {"rel_ids"} and set(NOID) == {"full-noid"}
+    model = PHOTformer(toy_split.n_rel, **dict(config("full-noid"), d=8))
+    assert model.ph and model.ot_readout and not model.rel_ids and not hasattr(model, "rel_id_emb")
