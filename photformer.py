@@ -360,7 +360,7 @@ class PHOTformer(nn.Module):
                  ot_readout=False, head_tf=False, max_head=16, rel_ids=False,
                  hodge=False, holo=0.0, cg_iters=25, ridge=1e-2,
                  pe=False, pe_mp=False, pe_norm=True, pe_struct=True, pe_gate=False, pe_drop=0.0,
-                 rel_pe=False, rw_steps=6, tda=None, tda_drop=0.2, ph=None, ph_dim=16, scan_thr=13, ph_filt="learned",
+                 rel_pe=False, rw_steps=6, tda=None, tda_drop=0.2, ph=None, ph_dim=16, scan_thr=13, ph_filt="learned", n_filt=1,
                  toper=False, toper_cap=32, drop_edge=0.0, tta=0.0, agg="sqrt", jk=False, link=False, ema=0.0, lr=5e-3, epochs=10, max_steps=120):
         super().__init__()
         self.drop_edge, self.tta, self.ema, self._ema = drop_edge, tta, ema, None
@@ -373,16 +373,21 @@ class PHOTformer(nn.Module):
         self.rel_pe = rel_pe
         # Query-conditioned persistent homology (ph.py): learned filtration f = tanh(w.x); per-candidate merge-tree
         # features are CONCATENATED to x (x || PE); ph="pe+scan" adds a Topo-Scan token sequence along f.
-        self.ph, self.scan_thr, self.ph_filt = ph, scan_thr, ph_filt
+        # n_filt > 1: K learned filtrations f_k = tanh(w_k.x). Each gets its own merge-tree features (shared encoder,
+        # concatenated); their Topo-Scan sequences are tagged with a filtration embedding and attend to each other.
+        self.ph, self.scan_thr, self.ph_filt, self.n_filt = ph, scan_thr, ph_filt, n_filt
         extra = 0
         if ph:
-            self.filt = nn.Linear(d, 1)
+            assert n_filt == 1 or (ph_filt == "learned" and not toper), "multiple filtrations: learned PH only"
+            self.filt = nn.Linear(d, n_filt)
             self.ph_enc = nn.Sequential(nn.Linear(6, ph_dim), nn.ReLU(), nn.Linear(ph_dim, ph_dim))
-            extra = ph_dim
+            extra = n_filt * ph_dim
             if ph == "pe+scan":
                 S = scan_thr - 2
                 self.scan_in = nn.Linear(4, d); self.scan_pos = nn.Parameter(torch.zeros(S, d))
                 self.scan_tf = nn.TransformerEncoderLayer(d, heads, 2 * d, dropout=0.0, batch_first=True)
+                if n_filt > 1:
+                    self.filt_emb = nn.Parameter(0.02 * torch.randn(n_filt, d))
                 extra += d
         # TopER along the same learned filtration: per-candidate (pivot, growth) of its neighbourhood + query-level TopER
         self.toper, self.toper_cap = toper, toper_cap
@@ -567,29 +572,37 @@ class PHOTformer(nn.Module):
     def ph_features(self, G, h, x, edge_mask, f=None):
         from ph import merge_tree, topo_scan
         B, N, _ = x.shape
-        if f is None:
-            f = torch.tanh(self.filt(x).squeeze(-1))                                  # (B, N) learned filtration
+        F_all = torch.tanh(self.filt(x)) if f is None else f.unsqueeze(-1)            # (B, N, K) learned filtrations
         indptr, nbr, perm = G.csr
         em = (edge_mask[:, perm.to(x.device)] > 0) if edge_mask is not None else torch.ones(B, len(nbr), dtype=torch.bool)
-        fn, emn, reach = f.detach().cpu().double().numpy(), em.cpu().numpy(), self.eenc.reach.cpu().numpy()
-        J, D, C, Z, T = [], [], [], [], []
-        for b in range(B):
-            j, d_, c, z = merge_tree(fn[b], int(h[b]), indptr, nbr, emn[b])
-            J.append(j); D.append(d_); C.append(c); Z.append(z)
-            if self.ph == "pe+scan":
-                T.append(topo_scan(fn[b], reach[b], indptr, nbr, emn[b], self.scan_thr, 2))
+        emn, reach = em.cpu().numpy(), self.eenc.reach.cpu().numpy()
         dev = x.device
-        J, D = torch.as_tensor(np.stack(J), device=dev), torch.as_tensor(np.stack(D), device=dev)
-        C, Z = torch.as_tensor(np.stack(C), device=dev).float(), torch.as_tensor(np.stack(Z), device=dev).float()
-        fj = f.gather(1, J.clamp_min(0)); joined = (J >= 0).float()
-        fd = f.gather(1, D.clamp_min(0))
-        pers = torch.where(D >= 0, f - fd, f + 1.0)                                  # essential bars: down to -1
-        pe = torch.stack([f, torch.where(J >= 0, fj, torch.full_like(f, -2.0)), joined, pers,
-                          torch.log1p(C), torch.log1p(Z) / math.log(N + 1)], -1)
-        out = [self.ph_enc(pe)]
+        pes, toks = [], []
+        for k in range(F_all.shape[-1]):
+            f = F_all[..., k]
+            fn = f.detach().cpu().double().numpy()
+            J, D, C, Z, T = [], [], [], [], []
+            for b in range(B):
+                j, d_, c, z = merge_tree(fn[b], int(h[b]), indptr, nbr, emn[b])
+                J.append(j); D.append(d_); C.append(c); Z.append(z)
+                if self.ph == "pe+scan":
+                    T.append(topo_scan(fn[b], reach[b], indptr, nbr, emn[b], self.scan_thr, 2))
+            J, D = torch.as_tensor(np.stack(J), device=dev), torch.as_tensor(np.stack(D), device=dev)
+            C, Z = torch.as_tensor(np.stack(C), device=dev).float(), torch.as_tensor(np.stack(Z), device=dev).float()
+            fj = f.gather(1, J.clamp_min(0)); joined = (J >= 0).float()
+            fd = f.gather(1, D.clamp_min(0))
+            pers = torch.where(D >= 0, f - fd, f + 1.0)                              # essential bars: down to -1
+            pe = torch.stack([f, torch.where(J >= 0, fj, torch.full_like(f, -2.0)), joined, pers,
+                              torch.log1p(C), torch.log1p(Z) / math.log(N + 1)], -1)
+            pes.append(self.ph_enc(pe))
+            if self.ph == "pe+scan":
+                toks.append(torch.log1p(torch.as_tensor(np.stack(T), device=dev).float()))   # (B, S, 4)
+        out = [torch.cat(pes, -1)]
         if self.ph == "pe+scan":
-            tok = torch.log1p(torch.as_tensor(np.stack(T), device=dev).float())          # (B, S, 4)
-            z = self.scan_tf(self.scan_in(tok) + self.scan_pos).mean(1)                    # (B, d)
+            e = self.scan_in(torch.stack(toks, 1)) + self.scan_pos                        # (B, K, S, d)
+            if len(toks) > 1:
+                e = e + self.filt_emb[:, None, :]
+            z = self.scan_tf(e.flatten(1, 2)).mean(1)                                     # (B, d): all K*S tokens
             out.append(z.unsqueeze(1).expand(B, N, -1))
         if self.toper:
             from ph import toper_nodes, toper_query

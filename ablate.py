@@ -5,7 +5,7 @@ Variants differ from PHOT only in the PH / OT switches; everything else (relatio
 graph (see the WN18RR epoch-selection finding), never on test.
 
 usage: python ablate.py run <variant> <dataset> <seed>     one run (THREADS env, default 1)
-       python ablate.py queue [workers=3] [seeds=0,1,2] [group=phot|backbone|noid]   every run not yet logged, in parallel
+       python ablate.py queue [workers=3] [seeds=0,1,2] [group=phot|backbone|noid|filt] [datasets=a,b]   every run not yet logged, in parallel
        python ablate.py table                              mean +- std per variant and dataset, with paired deltas
 """
 import json
@@ -34,18 +34,21 @@ BACKBONE = {
 }
 # full PHOT without relation identities: do PH + OT still add on top of the no-ID backbone (bb-noid)?
 NOID = {"full-noid": dict(rel_ids=False)}
+# several learned filtrations instead of one (merge-tree features per filtration, joint Topo-Scan)
+MULTIFILT = {"filt2": dict(n_filt=2), "filt4": dict(n_filt=4)}
 # group -> (variants, datasets, reference variant for paired deltas). NELL v1 is too noisy for these effects.
 GROUPS = {
     "phot":     (ABLATIONS, DATASETS, "full"),
     "backbone": ({"neither": ABLATIONS["neither"], **BACKBONE}, ["fb237_v1", "WN18RR_v1"], "neither"),
     "noid":     ({"bb-noid": BACKBONE["bb-noid"], **NOID}, ["fb237_v1", "WN18RR_v1"], "bb-noid"),
+    "filt":     ({"full": ABLATIONS["full"], **MULTIFILT}, ["fb237_v1", "WN18RR_v1"], "full"),
 }
 LOG = "results/ablation.jsonl"
 
 
 def config(variant):
     from photformer import VARIANTS
-    return dict(VARIANTS["PHOT"], **{**ABLATIONS, **BACKBONE, **NOID}[variant])
+    return dict(VARIANTS["PHOT"], **{**ABLATIONS, **BACKBONE, **NOID, **MULTIFILT}[variant])
 
 
 def run(variant, ds, seed):
@@ -75,10 +78,11 @@ def done():
     return {(r["variant"], r["dataset"], r["seed"]) for r in map(json.loads, open(LOG))}
 
 
-def queue(workers=3, seeds=(0, 1, 2), group="phot"):
+def queue(workers=3, seeds=(0, 1, 2), group="phot", only=None):
     os.makedirs("results/ablation_logs", exist_ok=True)
     have = done()
     variants, datasets, _ = GROUPS[group]
+    datasets = [d for d in datasets if only is None or d in only]
     jobs = [(v, d, s) for s in seeds for d in datasets for v in variants if (v, d, s) not in have]
     print(f"{len(jobs)} runs to do, {len(have)} already logged, {workers} workers", flush=True)
 
@@ -153,6 +157,6 @@ if __name__ == "__main__":
     elif sys.argv[1] == "queue":
         w = int(sys.argv[2]) if len(sys.argv) > 2 else 3
         seeds = tuple(int(s) for s in sys.argv[3].split(",")) if len(sys.argv) > 3 else (0, 1, 2)
-        queue(w, seeds, sys.argv[4] if len(sys.argv) > 4 else "phot")
+        queue(w, seeds, sys.argv[4] if len(sys.argv) > 4 else "phot", sys.argv[5].split(",") if len(sys.argv) > 5 else None)
     else:
         table()

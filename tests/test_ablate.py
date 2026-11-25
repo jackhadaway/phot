@@ -65,3 +65,37 @@ def test_full_noid_is_phot_without_ids(toy_split):
     assert diff == {"rel_ids"} and set(NOID) == {"full-noid"}
     model = PHOTformer(toy_split.n_rel, **dict(config("full-noid"), d=8))
     assert model.ph and model.ot_readout and not model.rel_ids and not hasattr(model, "rel_id_emb")
+
+
+def test_multifilt_variants(toy_split):
+    from ablate import MULTIFILT
+    base = config("full")
+    for v in MULTIFILT:
+        diff = {k for k in set(base) | set(config(v)) if base.get(k) != config(v).get(k)}
+        assert diff == {"n_filt"}, (v, diff)
+
+
+@pytest.mark.parametrize("K", [1, 2, 4])
+def test_multifilt_trains_and_each_filtration_gets_gradient(toy_split, K):
+    cfg = dict(config("full"), d=8, n_filt=K)
+    set_seed(0)
+    model = PHOTformer(toy_split.n_rel, **cfg)
+    assert model.filt.out_features == K and hasattr(model, "filt_emb") == (K > 1)
+    assert model.s1[0].in_features == 2 * 8 + 8 + K * 16 + 8          # x, zq, link, K merge-tree blocks, scan
+    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+    loss = train_epoch(model, toy_split, opt, batch=16, rng=np.random.default_rng(0), max_steps=2)
+    assert np.isfinite(loss)
+    g = model.filt.weight.grad
+    assert g is not None and (g.abs().sum(1) > 0).all(), "every filtration must receive gradient"
+
+
+def test_one_filtration_is_unchanged_model(toy_split):
+    """n_filt=1 builds exactly the old parameter set, so earlier checkpoints still load"""
+    set_seed(0); a = PHOTformer(toy_split.n_rel, **dict(config("full"), d=8))
+    set_seed(0); b = PHOTformer(toy_split.n_rel, **dict(config("full"), d=8, n_filt=1))
+    sa, sb = a.state_dict(), b.state_dict()
+    assert sa.keys() == sb.keys() and all(torch.equal(sa[k], sb[k]) for k in sa)
+    ck = torch.load("ckpt/abl_full_fb237_v1_s0.pt", weights_only=False) if __import__("os").path.exists(
+        "ckpt/abl_full_fb237_v1_s0.pt") else None
+    if ck is not None:
+        PHOTformer(ck["n_rel"], **ck["cfg"]).load_state_dict(ck["state"])
