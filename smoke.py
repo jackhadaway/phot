@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-import torch
+import torch 
 
 from photformer import DEVICE, VARIANTS, InductiveSplit, PHOTformer, evaluate, fit, set_seed
 
