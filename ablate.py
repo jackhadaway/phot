@@ -5,7 +5,7 @@ Variants differ from PHOT only in the PH / OT switches; everything else (relatio
 graph (see the WN18RR epoch-selection finding), never on test.
 
 usage: python ablate.py run <variant> <dataset> <seed>     one run (THREADS env, default 1)
-       python ablate.py queue [workers=3] [seeds=0,1,2] [group=phot|backbone|noid|filt] [datasets=a,b]   every run not yet logged, in parallel
+       python ablate.py queue [workers=3] [seeds=0,1,2] [group=phot|backbone|noid|filt|indsel] [datasets=a,b]   every run not yet logged, in parallel
        python ablate.py table                              mean +- std per variant and dataset, with paired deltas
 """
 import json
@@ -36,19 +36,28 @@ BACKBONE = {
 NOID = {"full-noid": dict(rel_ids=False)}
 # several learned filtrations instead of one (merge-tree features per filtration, joint Topo-Scan)
 MULTIFILT = {"filt2": dict(n_filt=2), "filt4": dict(n_filt=4)}
+# "<variant>@iv": the same model, but the epoch is selected on ind_valid (the inductive graph's own validation
+# triples: unseen entities, disjoint from ind_test) instead of the training graph's valid set. Report P1 only:
+# P2 merges ind_valid into the test set.
+IV = "@iv"
 # group -> (variants, datasets, reference variant for paired deltas). NELL v1 is too noisy for these effects.
 GROUPS = {
     "phot":     (ABLATIONS, DATASETS, "full"),
     "backbone": ({"neither": ABLATIONS["neither"], **BACKBONE}, ["fb237_v1", "WN18RR_v1"], "neither"),
     "noid":     ({"bb-noid": BACKBONE["bb-noid"], **NOID}, ["fb237_v1", "WN18RR_v1"], "bb-noid"),
     "filt":     ({"full": ABLATIONS["full"], **MULTIFILT}, ["fb237_v1", "WN18RR_v1"], "full"),
+    "indsel":   ({"full" + IV: {}, "full-noid" + IV: {}}, ["fb237_v1", "WN18RR_v1"], "full" + IV),
 }
 LOG = "results/ablation.jsonl"
 
 
 def config(variant):
     from photformer import VARIANTS
-    return dict(VARIANTS["PHOT"], **{**ABLATIONS, **BACKBONE, **NOID, **MULTIFILT}[variant])
+    return dict(VARIANTS["PHOT"], **{**ABLATIONS, **BACKBONE, **NOID, **MULTIFILT}[variant.removesuffix(IV)])
+
+
+def selection(variant):
+    return "ind_valid" if variant.endswith(IV) else "valid"
 
 
 def run(variant, ds, seed):
@@ -59,13 +68,13 @@ def run(variant, ds, seed):
     cfg = config(variant)
     set_seed(seed)
     model = PHOTformer(data.n_rel, **cfg).to(DEVICE)
-    tr = fit(model, data, seed=seed, verbose=True, valid_q=None, select="valid")
+    tr = fit(model, data, seed=seed, verbose=True, valid_q=None, select=selection(variant))
     res = {s: evaluate(model, data, s)["final"]["full"] for s in ("test", "test_merged")}
     os.makedirs("ckpt", exist_ok=True)
     torch.save(dict(dataset=ds, n_rel=data.n_rel, cfg=cfg, state=model.state_dict()),
                f"ckpt/abl_{variant}_{ds}_s{seed}.pt")
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
-    rec = dict(variant=variant, dataset=ds, seed=seed, test=res, train=tr, commit=commit,
+    rec = dict(variant=variant, dataset=ds, seed=seed, test=res, train=tr, commit=commit, select=selection(variant),
                threads=torch.get_num_threads())
     with open(LOG, "a") as fh:                       # one short line per run: safe to append from parallel workers
         fh.write(json.dumps(rec) + "\n")

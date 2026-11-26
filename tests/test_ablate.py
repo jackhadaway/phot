@@ -99,3 +99,19 @@ def test_one_filtration_is_unchanged_model(toy_split):
         "ckpt/abl_full_fb237_v1_s0.pt") else None
     if ck is not None:
         PHOTformer(ck["n_rel"], **ck["cfg"]).load_state_dict(ck["state"])
+
+
+def test_ind_valid_selection_variants():
+    from ablate import GROUPS, selection
+    variants, datasets, ref = GROUPS["indsel"]
+    assert set(variants) == {"full@iv", "full-noid@iv"} and ref == "full@iv"
+    assert config("full@iv") == config("full") and config("full-noid@iv") == config("full-noid")
+    assert selection("full@iv") == "ind_valid" and selection("full") == "valid" and selection("full-noid") == "valid"
+
+
+def test_ind_valid_split_is_disjoint_from_test(toy_split):
+    """selecting on ind_valid never sees a test triple"""
+    from photformer import split_queries
+    _, Qv, _ = split_queries(toy_split, "ind_valid")
+    _, Qt, _ = split_queries(toy_split, "test")
+    assert not ({tuple(q) for q in Qv.tolist()} & {tuple(q) for q in Qt.tolist()})
