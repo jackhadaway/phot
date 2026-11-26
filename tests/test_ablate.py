@@ -56,6 +56,7 @@ def test_paired_t_matches_tables():
     mu, sd, t, p = paired(np.array([-0.04, -0.035, -0.042]))
     assert sd == pytest.approx(np.std([-0.04, -0.035, -0.042], ddof=1))
     assert t == pytest.approx(mu / (sd / np.sqrt(3))) and p < 0.01
+    assert paired(np.zeros(3))[3] == 1.0
 
 
 def test_full_noid_is_phot_without_ids(toy_split):

@@ -125,6 +125,8 @@ def paired(delta):
     if n < 2:
         return delta.mean(), float("nan"), float("nan"), float("nan")
     sd = delta.std(ddof=1)
+    if sd == 0 and delta.mean() == 0:                 # identical results: no difference at all
+        return 0.0, 0.0, 0.0, 1.0
     t = delta.mean() / (sd / math.sqrt(n)) if sd > 0 else math.copysign(float("inf"), delta.mean())
     return delta.mean(), sd, t, t_pvalue(t, n - 1)
 
