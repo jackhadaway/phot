@@ -153,3 +153,13 @@ def test_reverse_sweep_is_merge_tree_of_negated_filtration(toy_split):
         j, _, _, _ = merge_tree(-f[b].double().numpy(), int(h[b]), indptr, nbr, em)
         expect = torch.where(torch.as_tensor(j) >= 0, -f[b][torch.as_tensor(j).clamp_min(0)], torch.tensor(-2.0))
         torch.testing.assert_close(cap["rev"][b, :, 1], expect)
+
+
+def test_schedule_variants(toy_split):
+    from ablate import GROUPS
+    assert set(GROUPS["sched"][0]) == {"full@iv", "ep5@iv", "ep10@iv"}
+    for v, e in (("ep5@iv", 5), ("ep10@iv", 10)):
+        diff = {k for k in set(config("full")) | set(config(v)) if config("full").get(k) != config(v).get(k)}
+        assert diff == {"epochs"} and config(v)["epochs"] == e
+        model = PHOTformer(toy_split.n_rel, **dict(config(v), d=8))
+        assert model.train_cfg["epochs"] == e                     # fit() reads the schedule (and cosine T_max) here
