@@ -1,0 +1,6 @@
+  ep   1 loss 3.5062 valid MRR 0.5005 (82s)
+  ep   2 loss 2.8300 valid MRR 0.4911 (158s)
+  ep   3 loss 2.7152 valid MRR 0.4869 (257s)
+  ep   4 loss 2.5949 valid MRR 0.4972 (349s)
+  ep   5 loss 2.4925 valid MRR 0.5029 (424s)
+ep5@iv fb237_v1 s0: P1 0.4850 P2 0.4940 (424s)

@@ -1,0 +1,6 @@
+  ep   1 loss 2.6814 valid MRR 0.6950 (116s)
+  ep   2 loss 2.1264 valid MRR 0.6955 (245s)
+  ep   3 loss 2.0236 valid MRR 0.6955 (370s)
+  ep   4 loss 1.8400 valid MRR 0.7055 (483s)
+  ep   5 loss 1.8458 valid MRR 0.7104 (614s)
+ep5@iv WN18RR_v1 s0: P1 0.6960 P2 0.7032 (614s)
