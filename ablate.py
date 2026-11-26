@@ -5,7 +5,7 @@ Variants differ from PHOT only in the PH / OT switches; everything else (relatio
 graph (see the WN18RR epoch-selection finding), never on test.
 
 usage: python ablate.py run <variant> <dataset> <seed>     one run (THREADS env, default 1)
-       python ablate.py queue [workers=3] [seeds=0,1,2] [group=phot|backbone|noid|filt|indsel] [datasets=a,b]   every run not yet logged, in parallel
+       python ablate.py queue [workers=3] [seeds=0,1,2] [group=phot|backbone|noid|filt|indsel|rev] [datasets=a,b]   every run not yet logged, in parallel
        python ablate.py table                              mean +- std per variant and dataset, with paired deltas
 """
 import json
@@ -40,6 +40,8 @@ MULTIFILT = {"filt2": dict(n_filt=2), "filt4": dict(n_filt=4)}
 # triples: unseen entities, disjoint from ind_test) instead of the training graph's valid set. Report P1 only:
 # P2 merges ind_valid into the test set.
 IV = "@iv"
+# the opposite merge-tree sweep as well (a second bottleneck value per candidate)
+REV = {"rev": dict(ph_rev=True)}
 # group -> (variants, datasets, reference variant for paired deltas). NELL v1 is too noisy for these effects.
 GROUPS = {
     "phot":     (ABLATIONS, DATASETS, "full"),
@@ -47,13 +49,14 @@ GROUPS = {
     "noid":     ({"bb-noid": BACKBONE["bb-noid"], **NOID}, ["fb237_v1", "WN18RR_v1"], "bb-noid"),
     "filt":     ({"full": ABLATIONS["full"], **MULTIFILT}, ["fb237_v1", "WN18RR_v1"], "full"),
     "indsel":   ({"full" + IV: {}, "full-noid" + IV: {}}, ["fb237_v1", "WN18RR_v1"], "full" + IV),
+    "rev":      ({"full" + IV: {}, "rev" + IV: {}}, ["fb237_v1", "WN18RR_v1"], "full" + IV),
 }
 LOG = "results/ablation.jsonl"
 
 
 def config(variant):
     from photformer import VARIANTS
-    return dict(VARIANTS["PHOT"], **{**ABLATIONS, **BACKBONE, **NOID, **MULTIFILT}[variant.removesuffix(IV)])
+    return dict(VARIANTS["PHOT"], **{**ABLATIONS, **BACKBONE, **NOID, **MULTIFILT, **REV}[variant.removesuffix(IV)])
 
 
 def selection(variant):

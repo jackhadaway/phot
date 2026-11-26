@@ -360,7 +360,7 @@ class PHOTformer(nn.Module):
                  ot_readout=False, head_tf=False, max_head=16, rel_ids=False,
                  hodge=False, holo=0.0, cg_iters=25, ridge=1e-2,
                  pe=False, pe_mp=False, pe_norm=True, pe_struct=True, pe_gate=False, pe_drop=0.0,
-                 rel_pe=False, rw_steps=6, tda=None, tda_drop=0.2, ph=None, ph_dim=16, scan_thr=13, ph_filt="learned", n_filt=1,
+                 rel_pe=False, rw_steps=6, tda=None, tda_drop=0.2, ph=None, ph_dim=16, scan_thr=13, ph_filt="learned", n_filt=1, ph_rev=False,
                  toper=False, toper_cap=32, drop_edge=0.0, tta=0.0, agg="sqrt", jk=False, link=False, ema=0.0, lr=5e-3, epochs=10, max_steps=120):
         super().__init__()
         self.drop_edge, self.tta, self.ema, self._ema = drop_edge, tta, ema, None
@@ -375,13 +375,19 @@ class PHOTformer(nn.Module):
         # features are CONCATENATED to x (x || PE); ph="pe+scan" adds a Topo-Scan token sequence along f.
         # n_filt > 1: K learned filtrations f_k = tanh(w_k.x). Each gets its own merge-tree features (shared encoder,
         # concatenated); their Topo-Scan sequences are tagged with a filtration embedding and attend to each other.
-        self.ph, self.scan_thr, self.ph_filt, self.n_filt = ph, scan_thr, ph_filt, n_filt
+        # ph_rev: also the opposite sweep (merge tree of -f: entities enter from low to high f), a second bottleneck
+        # value per candidate. Its own encoder; Topo-Scan stays on f.
+        self.ph, self.scan_thr, self.ph_filt, self.n_filt, self.ph_rev = ph, scan_thr, ph_filt, n_filt, ph_rev
         extra = 0
         if ph:
             assert n_filt == 1 or (ph_filt == "learned" and not toper), "multiple filtrations: learned PH only"
+            assert not ph_rev or ph_filt == "learned", "reverse sweep: learned PH only"
             self.filt = nn.Linear(d, n_filt)
             self.ph_enc = nn.Sequential(nn.Linear(6, ph_dim), nn.ReLU(), nn.Linear(ph_dim, ph_dim))
             extra = n_filt * ph_dim
+            if ph_rev:
+                self.ph_enc_rev = nn.Sequential(nn.Linear(6, ph_dim), nn.ReLU(), nn.Linear(ph_dim, ph_dim))
+                extra += n_filt * ph_dim
             if ph == "pe+scan":
                 S = scan_thr - 2
                 self.scan_in = nn.Linear(4, d); self.scan_pos = nn.Parameter(torch.zeros(S, d))
@@ -578,24 +584,27 @@ class PHOTformer(nn.Module):
         emn, reach = em.cpu().numpy(), self.eenc.reach.cpu().numpy()
         dev = x.device
         pes, toks = [], []
-        for k in range(F_all.shape[-1]):
-            f = F_all[..., k]
-            fn = f.detach().cpu().double().numpy()
-            J, D, C, Z, T = [], [], [], [], []
+        def tree(f, fn):                                     # merge tree of the sweep from high to low f
+            J, D, C, Z = [], [], [], []
             for b in range(B):
                 j, d_, c, z = merge_tree(fn[b], int(h[b]), indptr, nbr, emn[b])
                 J.append(j); D.append(d_); C.append(c); Z.append(z)
-                if self.ph == "pe+scan":
-                    T.append(topo_scan(fn[b], reach[b], indptr, nbr, emn[b], self.scan_thr, 2))
             J, D = torch.as_tensor(np.stack(J), device=dev), torch.as_tensor(np.stack(D), device=dev)
             C, Z = torch.as_tensor(np.stack(C), device=dev).float(), torch.as_tensor(np.stack(Z), device=dev).float()
             fj = f.gather(1, J.clamp_min(0)); joined = (J >= 0).float()
             fd = f.gather(1, D.clamp_min(0))
             pers = torch.where(D >= 0, f - fd, f + 1.0)                              # essential bars: down to -1
-            pe = torch.stack([f, torch.where(J >= 0, fj, torch.full_like(f, -2.0)), joined, pers,
-                              torch.log1p(C), torch.log1p(Z) / math.log(N + 1)], -1)
-            pes.append(self.ph_enc(pe))
+            return torch.stack([f, torch.where(J >= 0, fj, torch.full_like(f, -2.0)), joined, pers,
+                                torch.log1p(C), torch.log1p(Z) / math.log(N + 1)], -1)
+
+        for k in range(F_all.shape[-1]):
+            f = F_all[..., k]
+            fn = f.detach().cpu().double().numpy()
+            pes.append(self.ph_enc(tree(f, fn)))
+            if self.ph_rev:
+                pes.append(self.ph_enc_rev(tree(-f, -fn)))
             if self.ph == "pe+scan":
+                T = [topo_scan(fn[b], reach[b], indptr, nbr, emn[b], self.scan_thr, 2) for b in range(B)]
                 toks.append(torch.log1p(torch.as_tensor(np.stack(T), device=dev).float()))   # (B, S, 4)
         out = [torch.cat(pes, -1)]
         if self.ph == "pe+scan":

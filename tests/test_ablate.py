@@ -116,3 +116,40 @@ def test_ind_valid_split_is_disjoint_from_test(toy_split):
     _, Qv, _ = split_queries(toy_split, "ind_valid")
     _, Qt, _ = split_queries(toy_split, "test")
     assert not ({tuple(q) for q in Qv.tolist()} & {tuple(q) for q in Qt.tolist()})
+
+
+def test_reverse_sweep_variant(toy_split):
+    from ablate import GROUPS
+    assert {k for k in set(config("full")) | set(config("rev@iv")) if config("full").get(k) != config("rev@iv").get(k)} == {"ph_rev"}
+    assert set(GROUPS["rev"][0]) == {"full@iv", "rev@iv"}
+    set_seed(0)
+    model = PHOTformer(toy_split.n_rel, **dict(config("rev"), d=8))
+    assert model.s1[0].in_features == 2 * 8 + 8 + 2 * 16 + 8          # x, zq, link, both sweeps, scan
+    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+    loss = train_epoch(model, toy_split, opt, batch=16, rng=np.random.default_rng(0), max_steps=2)
+    assert np.isfinite(loss) and model.ph_enc_rev[0].weight.grad.abs().sum() > 0
+
+
+def test_reverse_sweep_is_merge_tree_of_negated_filtration(toy_split):
+    """the reverse block is the merge tree of -f; the forward block is unchanged from the plain model"""
+    from ph import merge_tree
+    set_seed(0)
+    model = PHOTformer(toy_split.n_rel, **dict(config("rev"), d=8)).eval()
+    G = toy_split.G_test
+    h = torch.tensor([0, 1]); q = torch.tensor([0, 1])
+    cap = {}
+    model.ph_enc.register_forward_pre_hook(lambda m, a: cap.__setitem__("fwd", a[0]))
+    model.ph_enc_rev.register_forward_pre_hook(lambda m, a: cap.__setitem__("rev", a[0]))
+    with torch.no_grad():
+        zr = model.relations(G, q); zq = zr[torch.arange(2), q]
+        x = model.eenc(G, h, zq, zr, None)
+        model.ph_features(G, h, x, None)
+        f = torch.tanh(model.filt(x))[..., 0]
+    torch.testing.assert_close(cap["fwd"][..., 0], f) and None
+    torch.testing.assert_close(cap["rev"][..., 0], -f)
+    indptr, nbr, _ = G.csr
+    em = np.ones(len(nbr), bool)
+    for b in range(2):
+        j, _, _, _ = merge_tree(-f[b].double().numpy(), int(h[b]), indptr, nbr, em)
+        expect = torch.where(torch.as_tensor(j) >= 0, -f[b][torch.as_tensor(j).clamp_min(0)], torch.tensor(-2.0))
+        torch.testing.assert_close(cap["rev"][b, :, 1], expect)
